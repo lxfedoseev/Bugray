@@ -44,6 +44,9 @@ class BugListViewController: UIViewController {
     setContextTitle()
     collectionView.dataSource = self
     collectionView.delegate = self
+    
+    collectionView.dragDelegate = self
+    collectionView.dropDelegate = self
   }
   
   private func setContextTitle() {
@@ -80,3 +83,128 @@ extension BugListViewController: UICollectionViewDelegateFlowLayout {
     return CGSize(width: collectionView.bounds.width, height: 100)
   }
 }
+
+extension BugListViewController: UICollectionViewDragDelegate {
+
+    func collectionView(_ collectionView: UICollectionView,
+                        itemsForBeginning session: UIDragSession,
+                        at indexPath: IndexPath) -> [UIDragItem] {
+        // 1
+        let dragCoordinator = BugDragCoordinator(source: context)
+        // 2
+        session.localContext = dragCoordinator
+        // 3
+        return [dragCoordinator.dragItemForBugAt(indexPath: indexPath)]
+    }
+    
+    func collectionView(_ collectionView: UICollectionView,
+                        dragSessionDidEnd session: UIDragSession) {
+        guard let dragCoordinator = session.localContext
+            as? BugDragCoordinator,
+        dragCoordinator.source == context,
+        dragCoordinator.dragCompleted == true,
+        dragCoordinator.isReordering == false else { return }
+        
+        collectionView.performBatchUpdates({
+            collectionView.deleteItems(
+                at: dragCoordinator.sourceIndexPaths)
+        }, completion: { _ in
+            self.setBugCount()
+        })
+        
+    }
+    
+    func collectionView(_ collectionView: UICollectionView,
+                        itemsForAddingTo session: UIDragSession,
+                        at indexPath: IndexPath, point: CGPoint) -> [UIDragItem] {
+        
+        guard let dragCoordinator =
+            session.localContext as? BugDragCoordinator,
+            dragCoordinator.source == context
+            else { return [] }
+        return [dragCoordinator.dragItemForBugAt(indexPath: indexPath)]
+    }
+    
+}
+
+
+extension BugListViewController: UICollectionViewDropDelegate {
+
+    func collectionView(_ collectionView: UICollectionView,
+                        canHandle session: UIDropSession) -> Bool {
+        return session.localDragSession != nil ? true : false
+    }
+    
+    func collectionView(_ collectionView: UICollectionView,
+                        performDropWith coordinator: UICollectionViewDropCoordinator){
+        
+        // 1
+        guard let dragCoordinator =
+            coordinator.session.localDragSession?.localContext
+                as? BugDragCoordinator
+            else { return }
+        // 2
+        let indexPath = coordinator.destinationIndexPath ??
+            IndexPath(item: collectionView.numberOfItems(inSection: 0),
+                      section: 0)
+        // 3
+        dragCoordinator.calculateDestinationIndexPaths(
+            from: indexPath, count: coordinator.items.count)
+        // 4
+        dragCoordinator.destination = context
+        // 5
+        moveBugs(using: dragCoordinator,
+                 performingDropWith: coordinator)
+    }
+    
+    func collectionView(_ collectionView: UICollectionView,
+                        dropSessionDidUpdate session: UIDropSession,
+                        withDestinationIndexPath destinationIndexPath: IndexPath?)
+        -> UICollectionViewDropProposal {
+            return UICollectionViewDropProposal(operation: .move,
+                                                intent: .insertAtDestinationIndexPath)
+    }
+    
+    private func moveBugs(using dragCoordinator: BugDragCoordinator,
+                          performingDropWith
+        dropCoordinator: UICollectionViewDropCoordinator) {
+    
+        guard let destination = dragCoordinator.destination,
+            let destinationIndexPaths =
+            dragCoordinator.destinationIndexPaths
+            else { return }
+        
+        let bugs = BugStore.sharedStore.deleteBugs(
+            at: dragCoordinator.sourceIndexes, in: dragCoordinator.source)
+        
+        // 1
+        for (index, item) in dropCoordinator.items.enumerated() {
+            // 2
+            let sourceIndexPath = dragCoordinator.sourceIndexPaths[index]
+            let destinationIndexPath = destinationIndexPaths[index]
+            // 3
+            collectionView.performBatchUpdates({
+                // 4
+                BugStore.sharedStore.insert(bugs: [bugs[index]],
+                                            into: destination, at: destinationIndexPath.item)
+                // 5
+                if dragCoordinator.isReordering {
+                    self.collectionView.moveItem(at: sourceIndexPath,
+                                                 to: destinationIndexPath)
+                } else {
+                    self.collectionView.insertItems(
+                        at: [destinationIndexPath])
+                }
+            }, completion: { _ in
+                // 6
+                self.setBugCount()
+            })
+            // 7
+            dropCoordinator.drop(item.dragItem,
+                                 toItemAt: destinationIndexPath)
+        }
+        dragCoordinator.dragCompleted = true
+    }
+
+}
+
